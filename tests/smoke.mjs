@@ -1,0 +1,14 @@
+import {chromium} from '@playwright/test';
+const browser=await chromium.launch({headless:true,args:['--no-sandbox','--enable-unsafe-swiftshader']});
+const errors=[];const p=await browser.newPage({viewport:{width:1440,height:900}});p.on('pageerror',e=>errors.push(e.message));
+await p.goto('http://localhost:5173');await p.locator('#begin').click();await p.waitForTimeout(1000);
+await p.screenshot({path:'tests/gameplay.png'});
+await p.keyboard.down('KeyW');await p.waitForTimeout(700);await p.keyboard.up('KeyW');
+await p.keyboard.press('KeyQ');await p.waitForTimeout(100);if(!(await p.locator('#cooldown').isVisible()))throw Error('Skill cooldown absent');
+await p.keyboard.press('KeyI');if(!(await p.locator('.itemgrid').isVisible()))throw Error('Inventory missing');await p.keyboard.press('Escape');
+await p.keyboard.press('KeyH');await p.waitForFunction(()=>document.getElementById('region').textContent==='Астральный приют',{},{timeout:30000});
+await p.locator('#partybtn').click();await p.locator('#createroom').click();await p.waitForTimeout(700);const code=(await p.locator('.roomcode').innerText()).trim();if(code.length!==6)throw Error('No room code');
+const guest=await browser.newPage();guest.on('pageerror',e=>errors.push(e.message));await guest.goto('http://localhost:5173');await guest.locator('#begin').click();await guest.locator('#partybtn').click();await guest.locator('#roominput').fill(code);await guest.locator('#joinroom').click();await guest.waitForTimeout(1000);
+if(await guest.locator('#partycount').innerText()!=='2 / 4')throw Error('Guest join failed');if(await p.locator('#partycount').innerText()!=='2 / 4')throw Error('Host count failed');
+await p.close();await guest.waitForTimeout(500);if(!(await guest.locator('#toast').innerText()).includes('закрыто'))throw Error('Host disconnect failed');
+if(errors.length)throw Error(errors.join('\n'));console.log('PASS: WebGL scene, movement, skill cooldown, inventory, hub cast, room creation, two-client join, host disconnect; zero JS errors.');await browser.close();
