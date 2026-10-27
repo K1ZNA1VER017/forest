@@ -1,12 +1,16 @@
 {
   "name": "forest-ash",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "type": "module",
   "scripts": {
     "dev": "node server.mjs",
     "build": "tsc --noEmit && vite build",
     "start": "node server.mjs",
-    "test:v02": "node tests/v02.mjs"
+    "test:v02": "node tests/v02.mjs",
+    "test:rules": "node tests/rules.mjs && node tests/campaign-rules.mjs",
+    "test:campaign": "node tests/campaign-browser.mjs",
+    "test:network": "node tests/network-v03.mjs",
+    "test:api": "node tests/php-api.mjs"
   },
   "dependencies": {
     "three": "^0.180.0",

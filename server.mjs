@@ -7,7 +7,7 @@ let handler;
 if (!production) {
   const { createServer: createViteServer } = await import("vite");
   const vite = await createViteServer({
-    server: { middlewareMode: true, allowedHosts: true },
+    server: { middlewareMode: true, allowedHosts: true, hmr: false },
     appType: "spa",
   });
   handler = (req, res) => vite.middlewares(req, res);
@@ -20,6 +20,7 @@ if (!production) {
     ".png": "image/png",
     ".svg": "image/svg+xml",
     ".json": "application/json",
+    ".wav": "audio/wav",
   };
   handler = async (req, res) => {
     if (req.url === "/healthz") {
@@ -43,9 +44,11 @@ if (!production) {
       res.writeHead(200, {
         "Content-Type": mime[extname(file)] || "application/octet-stream",
         "X-Content-Type-Options": "nosniff",
-        "Cache-Control": path.startsWith("/assets/")
-          ? "public, max-age=31536000, immutable"
-          : "no-cache",
+        "Cache-Control":
+          path.startsWith("/assets/") &&
+          /-[A-Za-z0-9_-]{8,}\.(js|css)$/.test(path)
+            ? "public, max-age=31536000, immutable"
+            : "no-cache",
       });
       res.end(req.method === "HEAD" ? undefined : data);
     } catch {
@@ -80,7 +83,15 @@ wss.on("connection", (ws) => {
         if (m.code && !room)
           return send(ws, { type: "error", message: "Комната не найдена" });
         if (!room) {
-          room = { host: ws.id, clients: new Set() };
+          room = {
+            host: ws.id,
+            clients: new Set(),
+            claimed: new Set(
+              (Array.isArray(m.collected) ? m.collected : []).filter(
+                (k) => typeof k === "string" && k.length < 100,
+              ),
+            ),
+          };
           rooms.set(code, room);
         }
         if (room.clients.size >= 4)
@@ -90,12 +101,53 @@ wss.on("connection", (ws) => {
           });
         room.clients.add(ws);
         ws.room = code;
-        send(ws, { type: "joined", code, id: ws.id, host: room.host });
+        send(ws, {
+          type: "joined",
+          code,
+          id: ws.id,
+          host: room.host,
+          claimed: [...room.claimed],
+        });
         for (const c of room.clients)
           send(c, { type: "party", count: room.clients.size });
       } else if (ws.room) {
         const room = rooms.get(ws.room);
-        if (["world", "zone"].includes(m.type) && room.host !== ws.id) return;
+        if (!room) return;
+        if (
+          ["world", "zone", "progress", "reward", "ending"].includes(m.type) &&
+          room.host !== ws.id
+        )
+          return;
+        if (m.type === "claim") {
+          if (
+            typeof m.key !== "string" ||
+            m.key.length > 100 ||
+            !["herb", "ore", "chest", "wood", "shard"].includes(m.kind)
+          )
+            return;
+          if (room.claimed.has(m.key))
+            return send(ws, {
+              type: "error",
+              message: "Этот предмет уже забрал другой игрок",
+            });
+          room.claimed.add(m.key);
+          for (const c of room.clients)
+            send(c, { type: "loot", key: m.key, owner: ws.id, kind: m.kind });
+          return;
+        }
+        if (
+          ![
+            "world",
+            "zone",
+            "progress",
+            "reward",
+            "ending",
+            "position",
+            "hit",
+            "revive",
+          ].includes(m.type)
+        )
+          return;
         for (const c of room.clients)
           if (c !== ws) send(c, { ...m, id: ws.id });
       }

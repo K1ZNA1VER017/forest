@@ -18,11 +18,12 @@
         ><small id="zone">ЛЕС · ДЕНЬ</small>
       </div>
       <div class="topright">
-        <span class="build">CHAPTER I / v0.2</span>
+        <span class="build">CAMPAIGN / v0.3</span>
         <div class="currency">
-          <img src="/assets/item-gold.png" alt="Монеты" /><b id="gold">0</b>
+          <img src="/assets/item-gold.png?v=3" alt="Монеты" /><b id="gold">0</b>
         </div>
-        <button id="statsbtn">Герой <kbd>C</kbd></button
+        <button id="accountbtn">Аккаунт</button
+        ><button id="statsbtn">Герой <kbd>C</kbd></button
         ><button id="sound" title="Звук">Звук: выкл.</button
         ><button id="help">?</button>
       </div>
@@ -37,11 +38,18 @@
       <div class="sidequest">
         <span>ПОБОЧНОЕ ПОРУЧЕНИЕ</span>
         <p id="sidequest">Травница: соберите 3 целебные травы</p>
-        <img src="/assets/item-herb.png" alt="Трава" />
+        <img src="/assets/item-herb.png?v=3" alt="Трава" />
         <b id="herbcount">0</b> / 3
       </div>
       <div class="hintstory">
         «Всё кажется незнакомым.<br />Но камни помнят ваши шаги.»
+      </div>
+      <div id="campaignprogress">Печати 0 / 4 · Бездна 0 / 5</div>
+      <div class="campaignnav">
+        <button id="mapbtn">Карта <kbd>M</kbd></button
+        ><button id="journalbtn">Журнал <kbd>J</kbd></button
+        ><button id="talentbtn">Навыки <kbd>T</kbd></button
+        ><button id="hubbtn">Приют <kbd>B</kbd></button>
       </div>
       <div class="party">
         <div class="eyebrow">ОТРЯД <span id="partycount">1 / 4</span></div>
@@ -49,7 +57,7 @@
           <span class="avatar"
             ><img
               class="hero-portrait"
-              src="/assets/warrior-portrait.png"
+              src="/assets/warrior-portrait.png?v=3"
               alt="Герой"
           /></span>
           <div>
@@ -66,6 +74,7 @@
         ><span class="north">N</span>
         <div class="mapcaption">ЗАБЫТЫЕ РУИНЫ <span>⌖</span></div>
       </div>
+      <div id="floornum">ИССЛЕДОВАНИЕ</div>
       <div class="time">✦ <span id="place">Окраина Серого леса</span></div>
     </aside>
     <div id="toast"></div>
@@ -76,7 +85,7 @@
         <div class="portrait">
           <img
             class="hero-portrait"
-            src="/assets/warrior-portrait.png"
+            src="/assets/warrior-portrait.png?v=3"
             alt="Герой"
           /><span id="lvlbadge">1</span>
         </div>
@@ -101,7 +110,7 @@
           ><span
             ><img
               class="pixel-icon"
-              src="/assets/item-relic.png"
+              src="/assets/item-relic.png?v=3"
               alt="Всплеск" /></span
           ><small>Всплеск</small><i id="cooldown"></i></button
         ><button id="heal" class="skill">
@@ -109,7 +118,7 @@
           ><span
             ><img
               class="pixel-icon"
-              src="/assets/item-potion.png"
+              src="/assets/item-potion.png?v=3"
               alt="Зелье" /></span
           ><small>Зелье · <b id="potions">2</b></small></button
         ><button id="dash" class="skill">
@@ -117,9 +126,18 @@
           ><span
             ><img
               class="pixel-icon"
-              src="/assets/item-feather.png"
+              src="/assets/item-feather.png?v=3"
               alt="Рывок" /></span
           ><small>Рывок <b id="dashcd"></b></small>
+        </button>
+        <button id="ward" class="skill">
+          <kbd>F</kbd
+          ><span
+            ><img
+              class="pixel-icon"
+              src="/assets/item-shield.png?v=3"
+              alt="Покров" /></span
+          ><small>Защита <b id="wardcd"></b></small>
         </button>
         <div class="skilldivider"></div>
         <button id="portal" class="skill">
@@ -127,7 +145,7 @@
           ><span
             ><img
               class="pixel-icon"
-              src="/assets/item-crystal.png"
+              src="/assets/item-crystal.png?v=3"
               alt="Астрал" /></span
           ><small>Астрал</small></button
         ><button id="inventory" class="skill">
@@ -135,7 +153,7 @@
           ><span
             ><img
               class="pixel-icon"
-              src="/assets/item-amulet.png"
+              src="/assets/item-amulet.png?v=3"
               alt="Сумка" /></span
           ><small>Вещи</small>
         </button>
@@ -156,10 +174,10 @@
       <section class="intro">
         <div class="eyebrow">ГЛАВА I · ПРОБУЖДЕНИЕ</div>
         <div class="introcast">
-          <img src="/assets/mage-portrait.png" alt="" /><img
-            src="/assets/warrior-portrait.png"
+          <img src="/assets/mage-portrait.png?v=3" alt="" /><img
+            src="/assets/warrior-portrait.png?v=3"
             alt=""
-          /><img src="/assets/archer-portrait.png" alt="" />
+          /><img src="/assets/archer-portrait.png?v=3" alt="" />
         </div>
         <h1>Лес помнит.<br /><em>Вы — нет.</em></h1>
         <p>
@@ -167,7 +185,7 @@
           среди чужих руин.<br />В памяти — только голос: «Не нарушай печать».
         </p>
         <button id="begin" class="primary">Открыть глаза <span>→</span></button
-        ><small>ОБНОВЛЕНИЕ 0.2 · ПРЕДМЕТЫ, ГЕРОИ И РЕМЕСЛО</small>
+        ><small>СОБСТВЕННЫЕ АССЕТЫ · КОРОТКАЯ КАМПАНИЯ</small>
       </section>
     </div>
     <script type="module" src="/src/main.ts"></script>

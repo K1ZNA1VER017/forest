@@ -2,3 +2,9 @@ node_modules/
 dist/
 tests/*.png
 .env
+.env.*
+!.env.example
+backend/*.sqlite
+
+# Ignore dependency symlinks as well as directories
+node_modules
