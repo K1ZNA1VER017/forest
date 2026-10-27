@@ -1,11 +1,12 @@
 {
   "name": "forest-ash",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "type": "module",
   "scripts": {
     "dev": "node server.mjs",
     "build": "tsc --noEmit && vite build",
-    "start": "node server.mjs"
+    "start": "node server.mjs",
+    "test:v02": "node tests/v02.mjs"
   },
   "dependencies": {
     "three": "^0.180.0",
@@ -19,6 +20,6 @@
     "typescript": "^5.9.0"
   },
   "engines": {
-    "node": ">=22.12.0"
+    "node": ">=20.19.0"
   }
 }
