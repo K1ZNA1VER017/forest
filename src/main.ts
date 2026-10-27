@@ -1,6 +1,19 @@
 import * as THREE from "three";
 import "./style.css";
 import "./v02.css";
+import "./v03.css";
+import { Account } from "./account";
+import { Music } from "./music";
+const music = new Music();
+import {
+  regions,
+  campaignDefaults,
+  talents,
+  floorLayouts,
+  regionUnlocked,
+  canDescend,
+  type Campaign,
+} from "./campaign";
 import {
   defaults,
   heroes,
@@ -96,25 +109,29 @@ function rnd() {
 function range(a: number, b: number) {
   return a + rnd() * (b - a);
 }
-type Save = Progress & {
-  x: number;
-  z: number;
-  hp: number;
-  mp: number;
-  xp: number;
-  level: number;
-  wood: number;
-  shards: number;
-  potions: number;
-  blade: boolean;
-  zone: string;
-  kills: number;
-  stash: number;
-  collected: string[];
-  bossDefeated: boolean;
-};
+type Save = Progress &
+  Campaign & {
+    x: number;
+    z: number;
+    hp: number;
+    mp: number;
+    xp: number;
+    level: number;
+    wood: number;
+    shards: number;
+    potions: number;
+    blade: boolean;
+    zone: string;
+    kills: number;
+    stash: number;
+    collected: string[];
+    bossDefeated: boolean;
+  };
+let externalReload = false;
+let guestWorld: Partial<Save> | null = null;
 let state: Save = {
   ...defaults,
+  ...campaignDefaults,
   x: 0,
   z: 3,
   hp: 100,
@@ -133,22 +150,50 @@ let state: Save = {
 };
 try {
   const s = JSON.parse(
-    localStorage.getItem("forest-ash-v2") ||
+    localStorage.getItem("forest-ash-v3") ||
+      localStorage.getItem("forest-ash-v2") ||
       localStorage.getItem("forest-ash-v1") ||
       "null",
   );
-  if (s && s.level && ["forest", "hub", "abyss"].includes(s.zone))
+  if (
+    s &&
+    s.level &&
+    ["forest", "mire", "quarry", "frost", "hub", "abyss"].includes(s.zone)
+  )
     state = { ...state, ...s };
 } catch {}
 if (!heroes.includes(state.hero)) state.hero = "warrior";
 if (!["sword", "bow", "staff"].includes(state.weapon)) state.weapon = "sword";
+if (state.hp <= 0) {
+  state.zone = "hub";
+  state.x = 0;
+  state.z = 2;
+  state.hp = maxHealth(state);
+  state.xp = 0;
+}
+state.floor = Math.max(1, Math.min(5, Number(state.floor) || 1));
+state.seals = Array.isArray(state.seals) ? state.seals : [];
+state.talents = Array.isArray(state.talents) ? state.talents : [];
+state.runKills = Array.isArray(state.runKills) ? state.runKills : [];
+state.bosses = Array.isArray(state.bosses) ? state.bosses : [];
 player.position.set(state.x, 0, state.z);
 const loader = new THREE.TextureLoader();
 const textures = new Map<string, THREE.Texture>();
+function texture(name: string) {
+  let t = textures.get(name);
+  if (!t) {
+    t = loader.load(`/assets/${name}.png?v=3`);
+    t.colorSpace = THREE.SRGBColorSpace;
+    t.magFilter = THREE.NearestFilter;
+    t.minFilter = THREE.NearestFilter;
+    textures.set(name, t);
+  }
+  return t;
+}
 function assetSprite(name: string) {
   let tex = textures.get(name);
   if (!tex) {
-    tex = loader.load(`/assets/${name}.png`);
+    tex = loader.load(`/assets/${name}.png?v=3`);
     tex.colorSpace = THREE.SRGBColorSpace;
     tex.magFilter = THREE.NearestFilter;
     tex.minFilter = THREE.NearestFilter;
@@ -210,10 +255,14 @@ type Enemy = {
   mesh: THREE.Group;
   attack: number;
   boss: boolean;
+  species: string;
+  charge: number;
+  pulse: number;
 };
 let props: Prop[] = [];
 let enemies: Enemy[] = [];
 let obstacles: { x: number; z: number; r: number }[] = [];
+let abyssTiles = new Set<string>();
 function tree(x: number, z: number, scale = 1) {
   const g = new THREE.Group();
   g.position.set(x, 0, z);
@@ -255,14 +304,27 @@ function ruin(x: number, z: number, h: number) {
 function addProp(kind: string, x: number, z: number) {
   if (
     ["shard", "wood", "herb", "ore", "chest"].includes(kind) &&
-    state.collected.includes(`${state.zone}:${kind}:${x}:${z}`)
+    state.collected.includes(
+      `${state.zone}${state.zone === "abyss" ? state.floor : ""}:${kind}:${x}:${z}`,
+    )
   )
     return;
   const g = new THREE.Group();
   g.position.set(x, 0, z);
   world.add(g);
   props.push({ kind, x, z, mesh: g, active: true });
-  if (["herb", "ore", "chest"].includes(kind)) {
+  if (["gate", "stairs", "altar", "hubupgrade"].includes(kind)) {
+    const o = assetSprite(
+      "item-" +
+        { gate: "portal", stairs: "key", altar: "seal", hubupgrade: "bench" }[
+          kind
+        ],
+    );
+    o.scale.set(1.1, 1.1, 1);
+    o.position.y = 1;
+    g.add(o);
+    cylinder(g, 0, 0.15, 0, 0.8, 0.3, 0x6b7476);
+  } else if (["herb", "ore", "chest"].includes(kind)) {
     const o = assetSprite(
       "item-" + { herb: "herb", ore: "ore", chest: "lock" }[kind],
     );
@@ -339,10 +401,47 @@ function addProp(kind: string, x: number, z: number) {
     (plane.material as THREE.MeshStandardMaterial).emissive.set(0x183e40);
   }
 }
-function enemy(x: number, z: number, boss = false, id = enemies.length) {
+function enemy(
+  x: number,
+  z: number,
+  boss = false,
+  id = enemies.length,
+  species = "",
+) {
+  if (!species)
+    species = boss
+      ? "warden"
+      : state.zone === "forest"
+        ? "wolf"
+        : regions.find((r) => r.id === state.zone)?.enemy ||
+          ["crawler", "shade", "golem"][state.floor % 3];
+  const rank =
+    state.zone === "abyss"
+      ? state.floor
+      : Math.max(
+          0,
+          regions.findIndex((r) => r.id === state.zone),
+        );
+  const hp = boss ? 170 + rank * 35 : 40 + rank * 12;
   const g = new THREE.Group();
   g.position.set(x, 0, z);
-  g.add(assetSprite(boss ? "knight" : "bandit"));
+  g.add(assetSprite(species));
+  if (boss) {
+    const warning = new THREE.Mesh(
+      new THREE.RingGeometry(0.9, 1, 40),
+      new THREE.MeshBasicMaterial({
+        color: 0xf39c64,
+        transparent: true,
+        opacity: 0,
+        side: THREE.DoubleSide,
+        depthWrite: false,
+      }),
+    );
+    warning.rotation.x = -Math.PI / 2;
+    warning.position.y = 0.08;
+    warning.name = "warning";
+    g.add(warning);
+  }
   const bar = box(g, 0, 2.12, 0, 0.8, 0.07, 0.03, 0xc8525c);
   bar.name = "enemyhp";
   if (boss) g.scale.setScalar(1.5);
@@ -352,8 +451,11 @@ function enemy(x: number, z: number, boss = false, id = enemies.length) {
     id,
     x,
     z,
-    hp: boss ? 180 : 45,
-    max: boss ? 180 : 45,
+    hp,
+    max: hp,
+    species,
+    charge: 0,
+    pulse: 4,
     mesh: g,
     attack: 0.9,
     boss,
@@ -369,9 +471,12 @@ function buildZone(zone: string, resetPos = true) {
   props = [];
   enemies = [];
   obstacles = [];
+  abyssTiles.clear();
   seed = 42;
   state.zone = zone;
-  if (zone === "forest") {
+  if (regions.some((r) => r.id === zone) && zone !== "forest") {
+    buildRegion(zone, resetPos);
+  } else if (zone === "forest") {
     scene.background = new THREE.Color(0x253e45);
     scene.fog = new THREE.FogExp2(0x253e45, 0.018);
     ambient.intensity = 2.1;
@@ -473,6 +578,9 @@ function buildZone(zone: string, resetPos = true) {
     enemy(7, -5);
     enemy(-7, -9);
     enemy(5, 11);
+    if (!state.bosses.includes("forest"))
+      enemy(0, -8, true, undefined, "golem");
+    addProp("gate", 7, 9);
     if (resetPos) player.position.set(0, 0, 4);
     $("region").textContent = "Забытые руины";
     $("zone").textContent = "ЛЕС · ДЕНЬ";
@@ -499,6 +607,7 @@ function buildZone(zone: string, resetPos = true) {
     addProp("bench", -3, -2);
     addProp("stash", 3, -2);
     addProp("portal", 0, -4);
+    addProp("hubupgrade", 0, -1);
     for (const x of [-4, 4]) {
       cylinder(world, x, 0.3, 2, 0.35, 0.6, 0x827253);
       const l = new THREE.PointLight(0xffc46c, 10, 8);
@@ -511,43 +620,7 @@ function buildZone(zone: string, resetPos = true) {
     $("zone").textContent = "МЕЖДУ МИРАМИ";
     $("place").textContent = "Ваше личное пространство";
   } else {
-    scene.background = new THREE.Color(0x141c23);
-    scene.fog = new THREE.FogExp2(0x141c23, 0.025);
-    ambient.intensity = 0.85;
-    sun.intensity = 0.7;
-    box(world, 0, -0.4, 0, 22, 0.8, 24, 0x414b4c);
-    for (let x = -10; x <= 10; x += 1.2)
-      for (let z = -11; z <= 11; z += 1.2)
-        box(
-          world,
-          x,
-          0.01,
-          z,
-          1.17,
-          0.05,
-          1.17,
-          Math.round(x + z) % 3 ? 0x454f50 : 0x3b4646,
-        );
-    for (let z = -11; z < 12; z += 2) {
-      box(world, -11, 1, z, 1, 2, 1.95, 0x394346);
-      box(world, 11, 1, z, 1, 2, 1.95, 0x394346);
-    }
-    for (const x of [-8, 8])
-      for (const z of [-7, 4]) {
-        ruin(x, z, 3);
-        const l = new THREE.PointLight(0xffac4f, 18, 10);
-        l.position.set(x, 2, z);
-        world.add(l);
-        box(world, x, 2, z + 0.5, 0.2, 0.45, 0.2, 0xffbc61);
-      }
-    addProp("portal", 0, 9);
-    enemy(-4, -3);
-    enemy(4, -5);
-    enemy(0, -8, true);
-    if (resetPos) player.position.set(0, 0, 7);
-    $("region").textContent = "Тюрьма без имени";
-    $("zone").textContent = "БЕЗДНА · ЭТАЖ 01";
-    $("place").textContent = "Зал забытой печати";
+    buildAbyss(resetPos);
   }
   const caption = document.querySelector(".mapcaption");
   if (caption)
@@ -555,8 +628,10 @@ function buildZone(zone: string, resetPos = true) {
       zone === "hub"
         ? "АСТРАЛЬНЫЙ ПРИЮТ"
         : zone === "abyss"
-          ? "БЕЗДНА · ЭТАЖ 01"
-          : "ЗАБЫТЫЕ РУИНЫ";
+          ? `БЕЗДНА · ЭТАЖ ${state.floor}`
+          : (
+              regions.find((r) => r.id === zone)?.name || "Забытые руины"
+            ).toUpperCase();
   hudSignature = "";
   syncHUD();
 }
@@ -616,6 +691,10 @@ function syncHUD() {
     state.hero,
     Math.ceil(dashCooldown),
     maxHealth(state),
+    state.seals.join(),
+    state.floor,
+    state.deepest,
+    state.ending,
   ].join(":");
   if (signature === hudSignature) return;
   hudSignature = signature;
@@ -631,7 +710,7 @@ function syncHUD() {
     $("hearts").innerHTML = Array.from(
       { length: 5 },
       (_, i) =>
-        `<img src="/assets/heart.png" class="${(state.hp / maxHealth(state)) * 5 > i ? "" : "empty"}" alt="">`,
+        `<img src="/assets/heart.png?v=3" class="${(state.hp / maxHealth(state)) * 5 > i ? "" : "empty"}" alt="">`,
     ).join("");
   }
   const max = maxHealth(state);
@@ -645,19 +724,30 @@ function syncHUD() {
   $("questbar").style.width = `${(Math.min(3, state.shards) / 3) * 100}%`;
   $("questcount").innerHTML =
     `Осколки памяти <b>${Math.min(3, state.shards)} / 3</b>`;
-  if (state.shards >= 3)
-    $("quest").innerHTML = state.blade
-      ? "Спуститесь в Бездну.<br>Победите стража печати."
-      : "Откройте астральный приют (H).<br>Создайте клинок у верстака.";
-  if (state.bossDefeated)
-    $("quest").innerHTML =
-      "Страж пал. Печать ещё цела.<br>Продолжение следует…";
+  $("campaignprogress").textContent =
+    `Печати ${state.seals.length} / 4 · Бездна ${state.deepest} / 5`;
+  $("quest").innerHTML = state.ending
+    ? state.ending === "seal"
+      ? "Вы стали новым хранителем."
+      : "Вы открыли путь из тюрьмы."
+    : state.zone === "abyss"
+      ? `Этаж ${state.floor} из 5.<br>Очистите комнаты и найдите ключ.`
+      : state.seals.length >= 4
+        ? "Четыре печати собраны.<br>Войдите в Бездну через древнюю арку."
+        : `Найдите хранителей четырёх регионов.<br>Печати: ${state.seals.length} / 4. Карта — M.`;
+  if ($("floornum"))
+    $("floornum").textContent =
+      state.zone === "abyss" ? `БЕЗДНА / ${state.floor}` : "ИССЛЕДОВАНИЕ";
 }
 function save() {
+  if (externalReload) return;
   state.x = player.position.x;
   state.z = player.position.z;
   try {
-    localStorage.setItem("forest-ash-v2", JSON.stringify(state));
+    localStorage.setItem(
+      "forest-ash-v3",
+      JSON.stringify({ ...state, ...guestWorld }),
+    );
     $("savedot").style.color = "#c4bf85";
     setTimeout(() => ($("savedot").style.color = ""), 500);
   } catch {
@@ -681,7 +771,7 @@ function burst(color: number, r: number) {
   scene.add(mesh);
   effects.push({ mesh, life: 0.45, max: 0.45 });
 }
-function hitEnemy(e: Enemy, damage: number) {
+function hitEnemy(e: Enemy, damage: number, credit = net.id) {
   if (e.hp <= 0) return;
   e.hp -= damage;
   combat = 5;
@@ -691,23 +781,33 @@ function hitEnemy(e: Enemy, damage: number) {
   tone(110, 0.15, "triangle");
   if (e.hp <= 0) {
     e.mesh.visible = false;
-    state.xp += e.boss ? 90 : 20;
-    state.wood += e.boss ? 3 : 1;
-    state.kills++;
-    state.gold += e.boss ? 40 : 8;
-    if (e.boss) state.bossDefeated = true;
+    if (state.zone === "abyss") state.runKills.push(`${state.floor}:${e.id}`);
+    if (!net.joined || credit === net.id) grantReward(e.boss);
+    else send({ type: "reward", target: credit, boss: e.boss });
+    if (e.boss) {
+      if (state.zone === "abyss") {
+        state.bossDefeated = true;
+        state.journal.push("Страж последней двери пал. Узник ждёт решения.");
+      } else {
+        const r = regions.find((r) => r.id === state.zone);
+        if (r && !state.seals.includes(r.id)) {
+          state.seals.push(r.id);
+          state.bosses.push(r.id);
+          state.journal.push(r.lore);
+          state.shards = Math.max(3, state.shards);
+          state.ore += 3;
+          state.herbs += 2;
+          state.hp = maxHealth(state);
+          setTimeout(() => loreMenu(r.name, r.lore), 300);
+        }
+      }
+    }
     toast(
       e.boss
         ? "Страж повержен · +90 опыта · Печать удержана"
         : "Тень рассеялась · +20 опыта · +1 древесина",
     );
-    if (state.xp >= state.level * 60) {
-      state.xp -= state.level * 60;
-      state.level++;
-      state.points += 2;
-      state.hp = maxHealth(state);
-      toast(`Новый уровень: ${state.level} · здоровье восстановлено`);
-    }
+    if (net.joined && net.isHost) sendProgress();
     save();
   }
   syncHUD();
@@ -742,6 +842,7 @@ function attack(nova = false) {
   for (const e of enemies) {
     const d = Math.hypot(e.x - player.position.x, e.z - player.position.z);
     if (
+      !blockedLine(player.position, e.mesh.position) &&
       d <
         (nova
           ? 3.5
@@ -766,9 +867,17 @@ function attack(nova = false) {
               : state.weapon === "staff"
                 ? 6
                 : 2.1,
-          damage: nova ? spellDamage(state) : damage(state),
+          damage: nova
+            ? spellDamage(state) * (state.talents.includes("echo") ? 1.25 : 1)
+            : campaignDamage(),
         });
-      else hitEnemy(e, nova ? spellDamage(state) : damage(state));
+      else
+        hitEnemy(
+          e,
+          nova
+            ? spellDamage(state) * (state.talents.includes("echo") ? 1.25 : 1)
+            : campaignDamage(),
+        );
     }
   }
   syncHUD();
@@ -803,57 +912,64 @@ function interact() {
   if (dead) return;
   if (!nearest) return;
   const p = nearest;
+  if (p.kind === "gate") {
+    mapMenu();
+    return;
+  }
+  if (p.kind === "hubupgrade") {
+    hubMenu();
+    return;
+  }
+  if (p.kind === "stairs") {
+    if (net.joined && !net.isHost) {
+      toast("Переход выбирает хозяин");
+      return;
+    }
+    if (enemies.some((e) => e.hp > 0)) {
+      toast("Сначала очистите этаж");
+      return;
+    }
+    state.deepest = Math.max(state.deepest, state.floor);
+    if (state.floor < 5) {
+      state.floor++;
+      changeZone("abyss");
+    } else endingMenu();
+    save();
+    return;
+  }
+  if (p.kind === "altar") {
+    if (enemies.some((e) => e.boss && e.hp > 0)) {
+      toast("Страж ещё жив");
+      return;
+    }
+    endingMenu();
+    return;
+  }
   if (p.kind === "npc") {
-    herbalist();
+    if (state.zone === "forest") herbalist();
+    else regionalNPC();
     return;
   }
-  if (["herb", "ore", "chest"].includes(p.kind)) {
-    if (p.kind === "herb") {
-      state.herbs++;
-      toast("Целебная трава +1");
-    }
-    if (p.kind === "ore") {
-      state.ore++;
-      toast("Железная руда +1");
-    }
-    if (p.kind === "chest") {
-      state.gold += 20;
-      state.potions++;
-      state.ore++;
-      toast("Тайник открыт · 20 монет · зелье · руда");
-    }
-    state.collected.push(`${state.zone}:${p.kind}:${p.x}:${p.z}`);
-    p.active = false;
-    p.mesh.visible = false;
-    tone(700, 0.2);
-    syncHUD();
-    save();
+  if (["herb", "ore", "chest", "shard", "wood"].includes(p.kind)) {
+    if (net.joined) send({ type: "claim", key: propKey(p), kind: p.kind });
+    else collectProp(p, true);
     return;
-  }
-  if (p.kind === "shard" || p.kind === "wood") {
-    if (p.kind === "shard") {
-      state.shards++;
-      state.mp = Math.min(60, state.mp + 15);
-      toast("Осколок памяти найден · «Печать… я уже видел её»");
-    } else {
-      state.wood++;
-      toast("Древесина +1");
-    }
-    state.collected.push(`${state.zone}:${p.kind}:${p.x}:${p.z}`);
-    p.active = false;
-    p.mesh.visible = false;
-    tone(700, 0.2);
-    syncHUD();
-    save();
   } else if (p.kind === "bench") craftMenu();
   else if (p.kind === "stash") stashMenu();
   else if (p.kind === "portal") {
-    changeZone(state.zone === "hub" ? "forest" : "hub");
+    if (state.zone === "hub") mapMenu();
+    else changeZone("hub");
   } else if (p.kind === "abyss") {
-    if (state.shards < 3) {
-      toast("Печать не откликается. Найдите три осколка.");
+    if (!canDescend(state.seals)) {
+      toast("Вход в Бездну откроют печати четырёх хранителей.");
       return;
     }
+    if (net.joined && !net.isHost) {
+      toast("Переход выбирает хозяин");
+      return;
+    }
+    state.floor = 1;
+    state.runKills = [];
     changeZone("abyss");
   }
 }
@@ -862,8 +978,19 @@ function changeZone(zone: string) {
     toast("Переход между мирами выбирает хозяин");
     return;
   }
+  if (state.zone !== "hub" && zone === "hub") state.returnZone = state.zone;
+  castTime = 0;
+  dashTime = 0;
   buildZone(zone);
-  if (net.joined) send({ type: "zone", zone });
+  $("modal").classList.add("hidden");
+  if (net.joined)
+    send({
+      type: "zone",
+      zone,
+      floor: state.floor,
+      seals: state.seals,
+      bosses: state.bosses,
+    });
   save();
   sendPosition();
 }
@@ -874,7 +1001,7 @@ function modal(html: string) {
 }
 function inventory() {
   modal(
-    `<div class="eyebrow">СНАРЯЖЕНИЕ И ПРИПАСЫ</div><h2>Всё, что вы унесли с собой</h2><div class="inventorylayout"><div class="paperdoll"><img src="/assets/${state.hero}-portrait.png" alt="${heroNames[state.hero]}"><h3>${heroNames[state.hero]}</h3><div class="equiprow">${icon(state.weapon === "staff" ? "crystal" : state.weapon)}${icon(state.armorEquipped ? "armor" : "feather")}</div><small>Урон ${damage(state)} · защита ${state.armorEquipped ? 4 : 0}</small><button id="openstats">Характеристики · ${state.points} очк.</button></div><div><div class="eyebrow">СУМКА · МАТЕРИАЛЫ И ПРЕДМЕТЫ</div><div class="itemgrid">${[
+    `<div class="eyebrow">СНАРЯЖЕНИЕ И ПРИПАСЫ</div><h2>Всё, что вы унесли с собой</h2><div class="inventorylayout"><div class="paperdoll"><img src="/assets/${state.hero}-portrait.png?v=3" alt="${heroNames[state.hero]}"><h3>${heroNames[state.hero]}</h3><div class="equiprow">${icon(state.weapon === "staff" ? "crystal" : state.weapon)}${icon(state.armorEquipped ? "armor" : "feather")}</div><small>Урон ${campaignDamage()} · защита ${state.armorEquipped ? 4 : 0}</small><button id="openstats">Характеристики · ${state.points} очк.</button></div><div><div class="eyebrow">СУМКА · МАТЕРИАЛЫ И ПРЕДМЕТЫ</div><div class="itemgrid">${[
       ["wood", "Дерево", state.wood],
       ["herb", "Трава", state.herbs],
       ["ore", "Руда", state.ore],
@@ -919,7 +1046,7 @@ function inventory() {
 }
 function craftMenu() {
   modal(
-    `<div class="eyebrow">АСТРАЛЬНАЯ МАСТЕРСКАЯ · УРОВЕНЬ 1</div><h2>Придайте материи форму</h2><div class="resourcebar">${icon("wood")} ${state.wood} ${icon("ore")} ${state.ore} ${icon("herb")} ${state.herbs}</div><div class="recipelist">${recipes
+    `<div class="eyebrow">АСТРАЛЬНАЯ МАСТЕРСКАЯ · УРОВЕНЬ ${state.benchLevel}</div><h2>Придайте материи форму</h2><div class="resourcebar">${icon("wood")} ${state.wood} ${icon("ore")} ${state.ore} ${icon("herb")} ${state.herbs}</div><div class="recipelist">${recipes
       .map((r) => {
         const owned =
           r.id === "blade"
@@ -927,7 +1054,7 @@ function craftMenu() {
             : r.id === "potion"
               ? false
               : state[r.id];
-        return `<div class="recipe">${icon(r.icon)}<div><h3>${r.name}</h3><p>${r.description}</p><small>${r.wood ? "Дерево " + r.wood + " · " : ""}${r.ore ? "Руда " + r.ore + " · " : ""}${r.herbs ? "Трава " + r.herbs : ""}${r.shard ? "Найденный осколок (катализатор)" : ""}</small></div><button data-craft="${r.id}" ${owned ? "disabled" : ""}>${owned ? "Создано" : "Создать"}</button></div>`;
+        return `<div class="recipe">${icon(r.icon)}<div><h3>${r.name}</h3><p>${r.description}${["staff", "armor"].includes(r.id) ? " · верстак 2" : ""}</p><small>${r.wood ? "Дерево " + r.wood + " · " : ""}${r.ore ? "Руда " + r.ore + " · " : ""}${r.herbs ? "Трава " + r.herbs : ""}${r.shard ? "Найденный осколок (катализатор)" : ""}</small></div><button data-craft="${r.id}" ${owned ? "disabled" : ""}>${owned ? "Создано" : "Создать"}</button></div>`;
       })
       .join("")}</div>`,
   );
@@ -935,6 +1062,10 @@ function craftMenu() {
     (b) =>
       (b.onclick = () => {
         const r = recipes.find((r) => r.id === b.dataset.craft)!;
+        if (["staff", "armor"].includes(r.id) && state.benchLevel < 2) {
+          toast("Требуется верстак уровня 2. Улучшения — B в приюте");
+          return;
+        }
         if (
           state.wood < r.wood ||
           state.ore < r.ore ||
@@ -969,11 +1100,12 @@ function craftMenu() {
 }
 function stashMenu() {
   modal(
-    `<div class="eyebrow">ЛИЧНЫЙ СКЛАД · УРОВЕНЬ 1</div><h2>То, что останется</h2><p>Древесина в сумке: ${state.wood}<br>Древесина на складе: ${state.stash}</p><button id="deposit">Сложить древесину</button><button id="withdraw">Забрать со склада</button><p class="note">Склад и содержимое сумки сохраняются в этом браузере.</p>`,
+    `<div class="eyebrow">ЛИЧНЫЙ СКЛАД · УРОВЕНЬ ${state.storageLevel}</div><h2>То, что останется</h2><p>Древесина в сумке: ${state.wood}<br>Древесина на складе: ${state.stash} / ${state.storageLevel * 30}</p><button id="deposit">Сложить древесину</button><button id="withdraw">Забрать со склада</button><p class="note">Склад и содержимое сумки сохраняются в этом браузере.</p>`,
   );
   $("deposit").onclick = () => {
-    state.stash += state.wood;
-    state.wood = 0;
+    const count = Math.min(state.wood, state.storageLevel * 30 - state.stash);
+    state.stash += count;
+    state.wood -= count;
     save();
     stashMenu();
   };
@@ -989,7 +1121,7 @@ $("begin").onclick = () => {
   $("intro").classList.add("hidden");
   started = true;
   heroMenu();
-  toast("WASD — движение · E — собрать · ЛКМ — удар");
+  toast("WASD — движение · M — карта · T — навыки · ЛКМ — атака");
 };
 $("inventory").onclick = inventory;
 $("attack").onclick = () => attack();
@@ -998,12 +1130,13 @@ $("portal").onclick = portal;
 $("heal").onclick = heal;
 $("sound").onclick = () => {
   sound = !sound;
+  music.set(sound);
   $("sound").textContent = `Звук: ${sound ? "вкл." : "выкл."}`;
   tone(440, 0.2);
 };
 $("help").onclick = () =>
   modal(
-    '<div class="eyebrow">ЛЕСНОЙ ПЕПЕЛ · 0.2</div><h2>Ваш первый путь</h2><p>WASD — движение относительно экрана<br>Пробел — рывок (3 секунды перезарядки)<br>C — характеристики и облик<br>ЛКМ — удар в сторону курсора<br>Q — круговой всплеск (20 маны, 6 секунд)<br>E — сбор и взаимодействие<br>R — лечебное зелье<br>H — переход в хаб вне боя (2 секунды)<br>I — инвентарь · Esc — закрыть окно<br>Колесо мыши — масштаб</p><p>Найдите три осколка, соберите древесину, создайте клинок в хабе. Вход в Бездну — на севере руин.</p><p class="note">Процедурная временная графика. Локальные сохранения, без аккаунтов. Кооператив — экспериментальный серверный relay, не P2P; хозяин управляет врагами. Публичный сервер должен работать всё время сессии.</p><button id="reset">Начать заново</button>',
+    '<div class="eyebrow">ЛЕСНОЙ ПЕПЕЛ · 0.3</div><h2>Ваш первый путь</h2><p>WASD — движение относительно экрана<br>Пробел — рывок (3 секунды перезарядки)<br>C — характеристики и облик<br>M — карта · J — журнал · T — навыки<br>F — покров (после изучения) · B — улучшения приюта<br>ЛКМ — удар в сторону курсора<br>Q — круговой всплеск (20 маны, 6 секунд)<br>E — сбор и взаимодействие<br>R — лечебное зелье<br>H — переход в хаб вне боя (2 секунды)<br>I — инвентарь · Esc — закрыть окно<br>Колесо мыши — масштаб</p><p>Победите хранителей четырёх регионов, соберите печати и пройдите пять этажей Бездны. В последнем зале выберите судьбу узника.</p><p class="note">Собственные процедурные спрайты и AI-портреты. Локальные сохранения, без аккаунтов. Кооператив — экспериментальный серверный relay, не P2P; хозяин управляет врагами. Публичный сервер должен работать всё время сессии.</p><button id="reset">Начать заново</button>',
   );
 $("modalcontent").addEventListener("click", (e) => {
   if (
@@ -1012,6 +1145,7 @@ $("modalcontent").addEventListener("click", (e) => {
   ) {
     localStorage.removeItem("forest-ash-v1");
     localStorage.removeItem("forest-ash-v2");
+    localStorage.removeItem("forest-ash-v3");
     location.reload();
   }
 });
@@ -1028,6 +1162,11 @@ window.addEventListener("keydown", (e) => {
   keys.add(k);
   if (k === "Space") dash();
   if (k === "KeyC") characterMenu();
+  if (k === "KeyM") mapMenu();
+  if (k === "KeyJ") journalMenu();
+  if (k === "KeyT") talentMenu();
+  if (k === "KeyF") ward();
+  if (k === "KeyB" && state.zone === "hub") hubMenu();
   if (k === "KeyE") interact();
   if (k === "KeyQ") attack(true);
   if (k === "KeyR") heal();
@@ -1100,7 +1239,7 @@ function sendPosition() {
 }
 function partyMenu() {
   modal(
-    `<div class="eyebrow">СОВМЕСТНАЯ ВЫЛАЗКА · ДО 4 ИГРОКОВ</div><h2>Не уходите в одиночку</h2>${net.joined ? `<p>Код вашей комнаты</p><div class="roomcode">${net.code}</div><p>${net.isHost ? "Вы — хозяин мира." : "Вы — гость."} В отряде: ${net.count} / 4</p><button id="copycode">Скопировать код</button>` : '<p>Создайте комнату или введите код друга.<br>Участники появляются в астральном приюте.</p><button id="createroom" class="primary">Создать комнату</button><input id="roominput" maxlength="6" placeholder="КОД КОМНАТЫ" autocomplete="off"><button id="joinroom">Присоединиться</button>'}<p class="note">Экспериментальный сетевой тест через этот сервер. Делитесь ссылкой на игру и кодом. При выходе хозяина сессия заканчивается. Сюжет и сбор ресурсов пока локальны; сетевой обмен предметами и блокировка контейнеров ещё не реализованы.</p>`,
+    `<div class="eyebrow">СОВМЕСТНАЯ ВЫЛАЗКА · ДО 4 ИГРОКОВ</div><h2>Не уходите в одиночку</h2>${net.joined ? `<p>Код вашей комнаты</p><div class="roomcode">${net.code}</div><p>${net.isHost ? "Вы — хозяин мира." : "Вы — гость."} В отряде: ${net.count} / 4</p><button id="copycode">Скопировать код</button>` : '<p>Создайте комнату или введите код друга.<br>Участники появляются в астральном приюте.</p><button id="createroom" class="primary">Создать комнату</button><input id="roominput" maxlength="6" placeholder="КОД КОМНАТЫ" autocomplete="off"><button id="joinroom">Присоединиться</button>'}<p class="note">Экспериментальный сетевой тест через этот сервер. Делитесь ссылкой на игру и кодом. При выходе хозяина сессия заканчивается. Мир и переходы ведёт хозяин; общая добыча выдаётся первому подобравшему. Личные материалы сохраняются отдельно. Обмен предметами ещё не реализован.</p>`,
   );
   if (net.joined)
     $("copycode").onclick = () => {
@@ -1130,7 +1269,7 @@ function connect(code: string) {
     `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/party`,
   );
   net.ws = ws;
-  ws.onopen = () => send({ type: "join", code });
+  ws.onopen = () => send({ type: "join", code, collected: state.collected });
   ws.onerror = () => toast("Не удалось подключиться к сетевому серверу");
   ws.onmessage = (ev) => {
     const m = JSON.parse(ev.data);
@@ -1143,6 +1282,24 @@ function connect(code: string) {
       net.id = m.id;
       net.code = m.code;
       net.isHost = m.host === m.id;
+      if (!net.isHost)
+        guestWorld = {
+          seals: [...state.seals],
+          floor: state.floor,
+          deepest: state.deepest,
+          ending: state.ending,
+          bosses: [...state.bosses],
+          journal: [...state.journal],
+          returnZone: state.returnZone,
+          bossDefeated: state.bossDefeated,
+          collected: [...state.collected],
+          benchLevel: state.benchLevel,
+          runKills: [...state.runKills],
+          zone: "hub",
+          x: 0,
+          z: 2,
+        };
+      state.collected = m.claimed || [];
       buildZone("hub");
       save();
       partyMenu();
@@ -1151,8 +1308,15 @@ function connect(code: string) {
       net.count = m.count;
       $("partycount").textContent = `${m.count} / 4`;
       if (net.isHost) {
-        send({ type: "zone", zone: state.zone });
+        send({
+          type: "zone",
+          zone: state.zone,
+          floor: state.floor,
+          seals: state.seals,
+          bosses: state.bosses,
+        });
         sendPosition();
+        sendProgress();
       }
     } else if (m.type === "position") {
       let p = peers.get(m.id);
@@ -1181,10 +1345,43 @@ function connect(code: string) {
       p.mesh.visible = m.zone === state.zone;
       if (m.hp <= 0) p.mesh.children[0].rotation.z = Math.PI / 2;
       else p.mesh.children[0].rotation.z = 0;
-    } else if (m.type === "zone" && !net.isHost && m.zone !== state.zone) {
+    } else if (
+      m.type === "zone" &&
+      !net.isHost &&
+      (m.zone !== state.zone || m.floor !== state.floor)
+    ) {
+      state.floor = m.floor || 1;
+      state.seals = m.seals || [];
+      state.bosses = m.bosses || [];
       buildZone(m.zone);
       save();
       sendPosition();
+    } else if (m.type === "loot") {
+      const p = props.find((p) => propKey(p) === m.key);
+      if (p) collectProp(p, m.owner === net.id);
+      else if (!state.collected.includes(m.key)) state.collected.push(m.key);
+      save();
+    } else if (m.type === "reward" && m.target === net.id) {
+      grantReward(Boolean(m.boss));
+      syncHUD();
+      save();
+    } else if (m.type === "progress" && !net.isHost) {
+      state.seals = m.seals || [];
+      state.bosses = m.bosses || [];
+      state.benchLevel = m.benchLevel || 1;
+      state.journal = m.journal || [];
+      state.ending = m.ending || "";
+      state.collected = m.collected || [];
+      for (const p of props)
+        if (state.collected.includes(propKey(p))) {
+          p.active = false;
+          p.mesh.visible = false;
+        }
+      hudSignature = "";
+      syncHUD();
+    } else if (m.type === "ending" && !net.isHost) {
+      state.ending = m.choice;
+      showEpilogue(m.choice);
     } else if (m.type === "world" && !net.isHost) {
       for (const v of m.enemies || []) {
         const e = enemies.find((e) => e.id === v.id);
@@ -1206,7 +1403,7 @@ function connect(code: string) {
         p.target.distanceTo(e.mesh.position) <
           Math.min(7.5, Number(m.range) || 4) + 0.5
       )
-        hitEnemy(e, Math.min(100, Math.max(0, Number(m.damage) || 0)));
+        hitEnemy(e, Math.min(100, Math.max(0, Number(m.damage) || 0)), m.id);
     } else if (m.type === "revive" && m.target === net.id && dead) {
       dead = false;
       state.hp = 50;
@@ -1232,6 +1429,12 @@ function connect(code: string) {
     for (const p of peers.values()) scene.remove(p.mesh);
     peers.clear();
     $("partycount").textContent = "1 / 4";
+    if (guestWorld) {
+      Object.assign(state, guestWorld);
+      guestWorld = null;
+      buildZone("hub");
+      save();
+    }
     if (net.code) toast("Сетевое соединение закрыто");
   };
 }
@@ -1271,6 +1474,14 @@ function minimap() {
     c.stroke();
   }
   const conv = (x: number, z: number) => [90 + (x - z) * 2, 70 + (x + z)];
+  if (state.zone === "abyss") {
+    c.fillStyle = "#7c939466";
+    for (const tile of abyssTiles) {
+      const [tx, tz] = tile.split(":").map(Number);
+      const [mx, my] = conv(tx, tz);
+      c.fillRect(mx - 1.5, my - 1, 3, 2);
+    }
+  }
   c.fillStyle = "#7b88614d";
   for (const o of obstacles) {
     const [x, y] = conv(o.x, o.z);
@@ -1316,12 +1527,12 @@ function applyHero() {
   temp.material.dispose();
   document
     .querySelectorAll<HTMLImageElement>(".hero-portrait")
-    .forEach((i) => (i.src = `/assets/${state.hero}-portrait.png`));
+    .forEach((i) => (i.src = `/assets/${state.hero}-portrait.png?v=3`));
   updateAttackIcon();
 }
 function heroMenu() {
   modal(
-    `<div class="eyebrow">НЕ КЛАСС. ВАША НОВАЯ ИСТОРИЯ.</div><h2>Кем вы проснётесь?</h2><p>Выберите облик. Умения и дальность боя определяет экипированное оружие — его можно менять.</p><div class="heroselect">${heroes.map((h) => `<button data-hero="${h}" class="${h === state.hero ? "selected" : ""}"><img src="/assets/${h}-portrait.png" alt="${heroNames[h]}"><b>${heroNames[h]}</b></button>`).join("")}</div><button id="confirmhero" class="primary">Продолжить путь →</button>`,
+    `<div class="eyebrow">НЕ КЛАСС. ВАША НОВАЯ ИСТОРИЯ.</div><h2>Кем вы проснётесь?</h2><p>Выберите облик. Умения и дальность боя определяет экипированное оружие — его можно менять.</p><div class="heroselect">${heroes.map((h) => `<button data-hero="${h}" class="${h === state.hero ? "selected" : ""}"><img src="/assets/${h}-portrait.png?v=3" alt="${heroNames[h]}"><b>${heroNames[h]}</b></button>`).join("")}</div><button id="confirmhero" class="primary">Продолжить путь →</button>`,
   );
   document.querySelectorAll<HTMLButtonElement>("[data-hero]").forEach(
     (b) =>
@@ -1336,7 +1547,7 @@ function heroMenu() {
 }
 function characterMenu() {
   modal(
-    `<div class="eyebrow">РАЗВИТИЕ · УРОВЕНЬ ${state.level}</div><h2>Память тела</h2><div class="statslayout"><img class="statportrait" src="/assets/${state.hero}-portrait.png" alt="Герой"><div><p>Свободные очки: <b>${state.points}</b></p>${(["strength", "vitality", "focus"] as const).map((k) => `<div class="statrow"><div><b>${{ strength: "Сила", vitality: "Жизненная сила", focus: "Сосредоточение" }[k]} · ${state[k]}</b><small>${{ strength: "+3 урона оружием", vitality: "+10 максимального HP", focus: "+5 урона всплеском" }[k]}</small></div><button data-stat="${k}" ${state.points ? "" : "disabled"}>＋</button></div>`).join("")}<p class="note">Урон: ${damage(state)} · всплеск: ${spellDamage(state)}<br>Макс. здоровье: ${maxHealth(state)} · защита: ${state.armorEquipped ? 4 : 0}<br>За каждый уровень: 2 очка.</p><button id="changehero">Изменить облик</button></div></div>`,
+    `<div class="eyebrow">РАЗВИТИЕ · УРОВЕНЬ ${state.level}</div><h2>Память тела</h2><div class="statslayout"><img class="statportrait" src="/assets/${state.hero}-portrait.png?v=3" alt="Герой"><div><p>Свободные очки: <b>${state.points}</b></p>${(["strength", "vitality", "focus"] as const).map((k) => `<div class="statrow"><div><b>${{ strength: "Сила", vitality: "Жизненная сила", focus: "Сосредоточение" }[k]} · ${state[k]}</b><small>${{ strength: "+3 урона оружием", vitality: "+10 максимального HP", focus: "+5 урона всплеском" }[k]}</small></div><button data-stat="${k}" ${state.points ? "" : "disabled"}>＋</button></div>`).join("")}<p class="note">Урон: ${campaignDamage()} · всплеск: ${spellDamage(state)}<br>Макс. здоровье: ${maxHealth(state)} · защита: ${state.armorEquipped ? 4 : 0}<br>За каждый уровень: 2 очка.</p><button id="changehero">Изменить облик</button></div></div>`,
   );
   $("changehero").onclick = heroMenu;
   document.querySelectorAll<HTMLButtonElement>("[data-stat]").forEach(
@@ -1355,7 +1566,7 @@ function characterMenu() {
 }
 function herbalist() {
   modal(
-    `<div class="eyebrow">ЭЛЛА · ЛЕСНАЯ ТРАВНИЦА</div><div class="npcdialog"><img src="/assets/healer-portrait.png" alt="Элла"><div><h2>Лес лечит тех, кто слушает</h2><p>«Ты не помнишь дорогу? Не торопись. Иногда сначала нужно помочь другому, чтобы найти себя».</p><p>${state.herbalistDone ? "«Спасибо за травы. Если понадобятся зелья — заходи»." : "Принеси 3 целебные травы. Я дам тебе 25 монет и 2 лечебных зелья."}</p><button id="deliverherbs" ${state.herbalistDone ? "disabled" : ""}>${state.herbalistDone ? "Поручение выполнено" : `Отдать травы (${state.herbs}/3)`}</button><div class="shopline">${icon("potion")}<span>Лечебное зелье · 12 монет</span><button id="buy">Купить</button></div><button id="sellore">Продать 1 руду · +6 монет</button></div></div>`,
+    `<div class="eyebrow">ЭЛЛА · ЛЕСНАЯ ТРАВНИЦА</div><div class="npcdialog"><img src="/assets/healer-portrait.png?v=3" alt="Элла"><div><h2>Лес лечит тех, кто слушает</h2><p>«Ты не помнишь дорогу? Не торопись. Иногда сначала нужно помочь другому, чтобы найти себя».</p><p>${state.herbalistDone ? "«Спасибо за травы. Если понадобятся зелья — заходи»." : "Принеси 3 целебные травы. Я дам тебе 25 монет и 2 лечебных зелья."}</p><button id="deliverherbs" ${state.herbalistDone ? "disabled" : ""}>${state.herbalistDone ? "Поручение выполнено" : `Отдать травы (${state.herbs}/3)`}</button><div class="shopline">${icon("potion")}<span>Лечебное зелье · 12 монет</span><button id="buy">Купить</button></div><button id="sellore">Продать 1 руду · +6 монет</button></div></div>`,
   );
   $("deliverherbs").onclick = () => {
     if (state.herbalistDone) return;
@@ -1404,7 +1615,7 @@ function dash() {
   )
     return;
   dashTime = 0.22;
-  dashCooldown = 3;
+  dashCooldown = state.talents.includes("step") ? 2 : 3;
   castTime = 0;
   const v = new THREE.Vector3();
   if (keys.has("KeyW")) v.add(new THREE.Vector3(-1, 0, -1));
@@ -1440,6 +1651,516 @@ function projectile() {
 }
 $("statsbtn").onclick = characterMenu;
 $("dash").onclick = dash;
+function propKey(p: Prop) {
+  return `${state.zone}${state.zone === "abyss" ? state.floor : ""}:${p.kind}:${p.x}:${p.z}`;
+}
+function collectProp(p: Prop, award: boolean) {
+  if (!p.active) return;
+  p.active = false;
+  p.mesh.visible = false;
+  const key = propKey(p);
+  if (!state.collected.includes(key)) state.collected.push(key);
+  if (award) {
+    if (p.kind === "wood") {
+      state.wood++;
+      toast("Древесина +1");
+    }
+    if (p.kind === "herb") {
+      state.herbs++;
+      toast("Целебная трава +1");
+    }
+    if (p.kind === "ore") {
+      state.ore++;
+      toast("Железная руда +1");
+    }
+    if (p.kind === "shard") {
+      state.shards++;
+      state.mp = Math.min(60, state.mp + 15);
+      toast("Осколок памяти +1");
+    }
+    if (p.kind === "chest") {
+      state.gold += 20;
+      state.potions++;
+      state.ore++;
+      toast("Тайник: 20 монет, зелье, руда");
+    }
+    tone(700, 0.2);
+  }
+  syncHUD();
+  save();
+}
+function grantReward(boss: boolean) {
+  state.xp += boss ? 90 : 20;
+  state.wood += boss ? 3 : 1;
+  state.kills++;
+  state.gold += boss ? 40 : 8;
+  if (state.kills % 2 === 0) state.ore++;
+  if (state.kills % 3 === 0) state.herbs++;
+  if (state.talents.includes("siphon"))
+    state.hp = Math.min(maxHealth(state), state.hp + 8);
+  while (state.xp >= state.level * 60) {
+    state.xp -= state.level * 60;
+    state.level++;
+    state.points += 2;
+    state.skillPoints++;
+    state.hp = maxHealth(state);
+    toast(`Уровень ${state.level} · +2 характеристики · +1 навык`);
+  }
+  save();
+}
+function sendProgress() {
+  send({
+    type: "progress",
+    seals: state.seals,
+    bosses: state.bosses,
+    benchLevel: state.benchLevel,
+    journal: state.journal,
+    collected: state.collected,
+    ending: state.ending,
+  });
+}
+// Campaign slice: explicit room templates and persistent world flags.
+let wardTime = 0,
+  wardCD = 0;
+function campaignDamage() {
+  return (
+    damage(state) +
+    state.weaponUpgrade * 5 +
+    (state.talents.includes("edge") ? 6 : 0)
+  );
+}
+function blockedLine(a: THREE.Vector3, b: THREE.Vector3) {
+  const d = a.distanceTo(b);
+  const dir = b.clone().sub(a).normalize();
+  for (let t = 0.4; t < d; t += 0.3) {
+    const p = a.clone().addScaledVector(dir, t);
+    if (obstacles.some((o) => Math.hypot(p.x - o.x, p.z - o.z) < o.r * 0.8))
+      return true;
+    if (
+      state.zone === "abyss" &&
+      !abyssTiles.has(`${Math.round(p.x)}:${Math.round(p.z)}`)
+    )
+      return true;
+  }
+  return false;
+}
+function buildRegion(zone: string, resetPos: boolean) {
+  const r = regions.find((r) => r.id === zone)!;
+  const index = regions.findIndex((x) => x.id === zone);
+  scene.background = new THREE.Color(r.fog);
+  scene.fog = new THREE.FogExp2(r.fog, 0.022);
+  ambient.intensity = zone === "frost" ? 2 : 1.6;
+  sun.intensity = zone === "mire" ? 1.8 : 2.7;
+  box(world, 0, -0.4, 0, 48, 0.8, 48, r.ground);
+  for (let i = 0; i < 160; i++) {
+    const x = range(-23, 23),
+      z = range(-23, 23);
+    if (zone === "mire") {
+      if (Math.abs(x) > 9 || Math.abs(z) > 14) {
+        box(world, x, 0.02, z, range(1, 3), 0.06, range(1, 3), 0x36666b);
+      }
+    } else if (zone === "quarry") {
+      if (Math.abs(x) > 9) {
+        const rock = new THREE.Mesh(
+          new THREE.DodecahedronGeometry(range(0.4, 1.8), 0),
+          material(i % 2 ? 0x887467 : 0x6c6969),
+        );
+        rock.position.set(x, 0.3, z);
+        rock.castShadow = true;
+        world.add(rock);
+        obstacles.push({ x, z, r: 0.55 });
+      }
+    } else
+      box(
+        world,
+        x,
+        0.015,
+        z,
+        range(0.5, 1.4),
+        0.04,
+        range(0.5, 1.4),
+        i % 2 ? 0xb5c9c3 : 0x829b9e,
+      );
+  }
+  for (let i = 0; i < 42; i++) {
+    const x = range(-23, 23),
+      z = range(-23, 23);
+    if (Math.abs(x) < 10 && Math.abs(z) < 15) continue;
+    if (zone !== "quarry") tree(x, z, range(0.6, 1.3));
+  }
+  for (let z = -14; z < 17; z += 1.5)
+    for (let x = -1; x <= 1; x++)
+      box(
+        world,
+        x * 1.45,
+        0.04,
+        z,
+        1.35,
+        0.1,
+        1.35,
+        zone === "frost" ? 0x8c9da1 : 0x8c8b79,
+      );
+  for (const [x, z, h] of [
+    [-5, -5, 3],
+    [5, -5, 2.5],
+    [-5, -11, 2],
+    [5, -11, 3],
+    [-7, 5, 1.5],
+  ])
+    ruin(x, z, h);
+  for (const [x, z] of [
+    [-3, 5],
+    [3, 4],
+    [-5, 1],
+    [4, -2],
+    [6, 8],
+  ]) {
+    addProp(index === 2 ? "ore" : "herb", x, z);
+    addProp("wood", x + 1.6, z + 0.4);
+  }
+  addProp("ore", 7, -2);
+  addProp("ore", -7, -1);
+  addProp("chest", 6, -10);
+  addProp("npc", -4, 3);
+  addProp("gate", 0, 12);
+  addProp("abyss", 0, -15);
+  enemy(-6, -3);
+  enemy(6, -1);
+  enemy(-3, -9);
+  enemy(7, 7);
+  if (!state.bosses.includes(zone))
+    enemy(
+      0,
+      -9,
+      true,
+      undefined,
+      index === 1 ? "wisp" : index === 2 ? "golem" : "warden",
+    );
+  if (resetPos) player.position.set(0, 0, 6);
+  $("region").textContent = r.name;
+  $("zone").textContent = r.subtitle.toUpperCase();
+  $("place").textContent = r.subtitle;
+}
+function buildAbyss(resetPos: boolean) {
+  scene.background = new THREE.Color(0x101923);
+  scene.fog = new THREE.FogExp2(0x101923, 0.024);
+  ambient.intensity = 0.95;
+  sun.intensity = 0.55;
+  const layout = floorLayouts[(state.floor - 1) % 5];
+  const floorColor = state.floor % 2 ? 0x424f53 : 0x4b4657;
+  for (const [cx, cz] of layout) {
+    for (let x = cx * 8 - 3; x <= cx * 8 + 3; x++)
+      for (let z = cz * 8 - 3; z <= cz * 8 + 3; z++)
+        abyssTiles.add(`${x}:${z}`);
+  }
+  // Corridors connect adjacent authored room modules.
+  for (const [cx, cz] of layout)
+    for (const [dx, dz] of [
+      [1, 0],
+      [0, 1],
+    ])
+      if (layout.some((p) => p[0] === cx + dx && p[1] === cz + dz)) {
+        for (let t = 0; t <= 8; t++)
+          for (let w = -1; w <= 1; w++)
+            abyssTiles.add(
+              `${cx * 8 + dx * t + dz * w}:${cz * 8 + dz * t + dx * w}`,
+            );
+      }
+  for (const tile of abyssTiles) {
+    const [x, z] = tile.split(":").map(Number);
+    box(
+      world,
+      x,
+      -0.2,
+      z,
+      0.98,
+      0.4,
+      0.98,
+      (x + z) % 3 ? floorColor : 0x586367,
+    );
+    for (const [dx, dz] of [
+      [1, 0],
+      [-1, 0],
+      [0, 1],
+      [0, -1],
+    ])
+      if (!abyssTiles.has(`${x + dx}:${z + dz}`)) {
+        // Low walls retain visibility while preventing void traversal.
+        box(
+          world,
+          x + dx * 0.48,
+          0.45,
+          z + dz * 0.48,
+          dx ? 0.16 : 1,
+          0.9,
+          dz ? 0.16 : 1,
+          0x293a40,
+        );
+      }
+  }
+  layout.forEach(([cx, cz], i) => {
+    const x = cx * 8,
+      z = cz * 8;
+    if (i > 0) {
+      enemy(x - 1, z, false, undefined, i % 2 ? "crawler" : "shade");
+      if (i > 1) enemy(x + 1, z + 1, false, undefined, "golem");
+    }
+    const l = new THREE.PointLight(i % 2 ? 0xd3a45b : 0x75a9b6, 10, 11);
+    l.position.set(x - 2, 2, z - 2);
+    world.add(l);
+    cylinder(world, x - 2, 0.65, z - 2, 0.18, 1.3, 0x7c6a4b);
+    box(world, x - 2, 1.45, z - 2, 0.18, 0.3, 0.18, 0xf7c06b);
+    if (i === 2) addProp("chest", x - 2, z + 1);
+  });
+  if (state.floor === 5) {
+    enemy(0, -9, true, undefined, "warden");
+    addProp("altar", 0, -10);
+  } else addProp("stairs", 0, -9);
+  for (const e of enemies)
+    if (state.runKills.includes(`${state.floor}:${e.id}`)) {
+      e.hp = 0;
+      e.mesh.visible = false;
+    }
+  addProp("portal", 0, 10);
+  if (
+    resetPos ||
+    !abyssTiles.has(
+      `${Math.round(player.position.x)}:${Math.round(player.position.z)}`,
+    )
+  )
+    player.position.set(0, 0, 8);
+  $("region").textContent = [
+    "Галерея шёпота",
+    "Затопленные кельи",
+    "Чертог углей",
+    "Зал забытых имён",
+    "Сердце тюрьмы",
+  ][state.floor - 1];
+  $("zone").textContent = `БЕЗДНА · ЭТАЖ ${state.floor} / 5`;
+  $("place").textContent = "Тюрьма между мирами";
+}
+function mapMenu() {
+  modal(
+    `<div class="eyebrow">ПУТИ МЕЖДУ ПЕЧАТЯМИ</div><h2>Мир ещё помнит ваше имя</h2><p>Побеждайте хранителя региона, чтобы открыть следующий путь. Переходы доступны вне боя.</p><div class="worldcards">${regions.map((r, i) => `<button data-travel="${r.id}" class="worldcard ${state.zone === r.id ? "current" : ""}" ${regionUnlocked(state.seals, i) ? "" : "disabled"} style="--region:${r.color}"><span>0${i + 1} / ${state.seals.includes(r.id) ? "ПЕЧАТЬ НАЙДЕНА" : regionUnlocked(state.seals, i) ? "ОТКРЫТО" : "ЗАКРЫТО"}</span><img src="/assets/item-${["herb", "mana", "ash", "ice"][i]}.png?v=3" alt=""><h3>${r.name}</h3><p>${r.subtitle}</p><small>Хранитель: ${r.boss}</small></button>`).join("")}</div><div class="mapactions"><button data-travel="hub">Астральный приют</button><button id="abyssentry" ${canDescend(state.seals) ? "" : "disabled"}>Бездна · новая вылазка</button><button id="openjournal">Журнал (${state.journal.length})</button></div><p class="note">Уход в хаб или новая вылазка сбрасывают текущую расстановку врагов Бездны, но сохраняют найденные вещи. Хранители регионов после победы не возвращаются.</p>`,
+  );
+  document.querySelectorAll<HTMLButtonElement>("[data-travel]").forEach(
+    (b) =>
+      (b.onclick = () => {
+        if (combat > 0) {
+          toast("Нельзя переходить во время боя");
+          return;
+        }
+        changeZone(b.dataset.travel!);
+      }),
+  );
+  $("abyssentry").onclick = () => {
+    if (!canDescend(state.seals) || combat > 0) return;
+    if (net.joined && !net.isHost) {
+      toast("Переход выбирает хозяин");
+      return;
+    }
+    state.floor = 1;
+    state.runKills = [];
+    changeZone("abyss");
+  };
+  $("openjournal").onclick = journalMenu;
+}
+function journalMenu() {
+  modal(
+    `<div class="eyebrow">ЖУРНАЛ СТРАННИКА</div><h2>Память не делает вас слабее</h2><div class="journalentry"><b>Основной путь · ${state.seals.length}/4 печатей · Бездна ${state.deepest}/5</b><p>Собрать печати Корня, Прилива, Пламени и Инея. Войти в тюрьму, пройти пять этажей и решить судьбу узника.</p></div>${regions.map((r) => `<div class="journalentry"><b>${state.seals.includes(r.id) ? "◆" : "◇"} ${r.name} · ${r.boss}</b><p>${state.seals.includes(r.id) ? r.lore : "Воспоминание скрыто за печатью хранителя."}</p></div>`).join("")}<h3>Поручения жителей</h3><p>Элла: ${state.herbalistDone ? "выполнено" : "принесите 3 травы"}<br>Иара: ${state.quests.includes("mire") ? "выполнено" : "принесите 4 древесины"}<br>Орн: ${state.quests.includes("quarry") ? "выполнено" : "принесите 3 руды"}<br>Вея: ${state.quests.includes("frost") ? "выполнено" : "принесите 4 травы"}</p>${state.ending ? `<div class="journalentry"><b>Финал: ${state.ending === "seal" ? "Новый хранитель" : "Открытая дверь"}</b><p>Ваш выбор сохранён. Мир остаётся доступен для исследования.</p></div>` : ""}`,
+  );
+}
+function loreMenu(title: string, text: string) {
+  modal(
+    `<div class="eyebrow">ВОСПОМИНАНИЕ ВОЗВРАЩАЕТСЯ</div><h2>${title}</h2><p class="loretext">${text}</p><p>Печать найдена. Новый путь отмечен на карте.</p><button id="lorecontinue" class="primary">Продолжить</button><button id="loremap">Открыть карту</button>`,
+  );
+  $("lorecontinue").onclick = () => $("modal").classList.add("hidden");
+  $("loremap").onclick = mapMenu;
+}
+function regionalNPC() {
+  const r = regions.find((r) => r.id === state.zone)!;
+  const z = r.id;
+  const resource = z === "mire" ? "wood" : z === "quarry" ? "ore" : "herbs";
+  const amount = z === "mire" ? 4 : z === "quarry" ? 3 : 4;
+  const name =
+    resource === "wood" ? "древесины" : resource === "ore" ? "руды" : "трав";
+  const done = state.quests.includes(z);
+  modal(
+    `<div class="eyebrow">${r.npc}</div><div class="npcdialog"><img src="/assets/healer-portrait.png?v=3" alt="Житель"><div><h2>Маленькое дело среди руин</h2><p>${z === "mire" ? "«Мост поглотила вода. Помоги мне починить настил, и я покажу знак хранителя»." : z === "quarry" ? "«Огонь ушёл из горна. Но руда ещё жива. Принеси немного — я поделюсь припасами»." : "«Ветер съел последние травы. Принеси сбор для путников, пока дорога не закрылась». "}</p><p>Нужно ${amount} ${name}. Награда: 35 монет, 2 зелья, 1 очко навыка.</p><button id="regionaldeliver" ${done ? "disabled" : ""}>${done ? "Поручение выполнено" : `Передать (${state[resource]}/${amount})`}</button><button id="regionalheal">Купить зелье · 12 монет</button></div></div>`,
+  );
+  $("regionaldeliver").onclick = () => {
+    if (done) return;
+    if (state[resource] < amount) {
+      toast("Недостаточно материалов");
+      return;
+    }
+    state[resource] -= amount;
+    state.quests.push(z);
+    state.gold += 35;
+    state.potions += 2;
+    state.skillPoints++;
+    save();
+    syncHUD();
+    regionalNPC();
+  };
+  $("regionalheal").onclick = () => {
+    if (state.gold < 12) {
+      toast("Недостаточно монет");
+      return;
+    }
+    state.gold -= 12;
+    state.potions++;
+    save();
+    syncHUD();
+    regionalNPC();
+  };
+}
+function talentMenu() {
+  modal(
+    `<div class="eyebrow">НАВЫКИ · ${state.skillPoints} СВОБОДНЫХ ОЧКОВ</div><h2>То, чему научила пустота</h2><div class="talentgrid">${talents
+      .map((t) => {
+        const owned = state.talents.includes(t.id);
+        const prereq = !t.requires || state.talents.includes(t.requires);
+        return `<button data-talent="${t.id}" class="talent ${owned ? "learned" : ""}" ${owned || !prereq || state.skillPoints < 1 ? "disabled" : ""}>${icon(t.icon)}<h3>${t.name}</h3><p>${t.desc}</p><small>${owned ? "ИЗУЧЕНО" : !prereq ? "ТРЕБУЕТ ПРЕДЫДУЩИЙ НАВЫК" : "ИЗУЧИТЬ · 1 ОЧКО"}</small></button>`;
+      })
+      .join(
+        "",
+      )}</div><p class="note">Отдельные очки навыков выдаются за уровни и поручения жителей. Характеристики расходуют собственные очки в меню C.</p>`,
+  );
+  document.querySelectorAll<HTMLButtonElement>("[data-talent]").forEach(
+    (b) =>
+      (b.onclick = () => {
+        const t = talents.find((t) => t.id === b.dataset.talent)!;
+        if (
+          state.skillPoints < 1 ||
+          state.talents.includes(t.id) ||
+          (t.requires && !state.talents.includes(t.requires))
+        )
+          return;
+        state.skillPoints--;
+        state.talents.push(t.id);
+        save();
+        talentMenu();
+      }),
+  );
+}
+function ward() {
+  if (!state.talents.includes("ward")) {
+    toast("Изучите «Покров пустоты» в меню T");
+    return;
+  }
+  if (wardCD > 0 || state.mp < 18 || dead) return;
+  state.mp -= 18;
+  wardTime = 5;
+  wardCD = 12;
+  burst(0x97bfdc, 1.1);
+  tone(470, 0.3);
+  syncHUD();
+}
+function hubMenu() {
+  if (net.joined && !net.isHost) {
+    toast("Улучшения приюта выбирает хозяин");
+    return;
+  }
+  if (state.zone !== "hub") {
+    toast("Улучшения доступны в приюте");
+    return;
+  }
+  modal(
+    `<div class="eyebrow">ВАШЕ МЕСТО В ПУСТОТЕ</div><h2>Приют, который помнит</h2><div class="upgradegrid"><div>${icon("bench")}<h3>Верстак · ${state.benchLevel} / 3</h3><p>Уровень 2 открывает посох и броню. Уровень 3 позволяет улучшать оружие.</p><button id="upgradebench" ${state.benchLevel >= 3 ? "disabled" : ""}>Улучшить · ${state.benchLevel * 20} монет, 3 дерева, 2 руды</button></div><div>${icon("chest")}<h3>Склад · ${state.storageLevel} / 3</h3><p>Вместимость каждого типа материала: ${state.storageLevel * 30}. Дерево хранится отдельно от сумки.</p><button id="upgradestorage" ${state.storageLevel >= 3 ? "disabled" : ""}>Улучшить · ${state.storageLevel * 15} монет, 3 дерева</button></div><div>${icon("sword")}<h3>Закалка оружия · +${state.weaponUpgrade}</h3><p>+5 урона ко всем видам оружия за ступень (до +3). Требуется верстак 3.</p><button id="upgradeweapon" ${state.weaponUpgrade >= 3 || state.benchLevel < 3 ? "disabled" : ""}>Закалить · 30 монет, 3 руды</button></div></div>`,
+  );
+  $("upgradebench").onclick = () => {
+    if (
+      state.benchLevel >= 3 ||
+      state.gold < state.benchLevel * 20 ||
+      state.wood < 3 ||
+      state.ore < 2
+    ) {
+      toast("Не хватает материалов");
+      return;
+    }
+    state.gold -= state.benchLevel * 20;
+    state.wood -= 3;
+    state.ore -= 2;
+    state.benchLevel++;
+    hubChanged();
+  };
+  $("upgradestorage").onclick = () => {
+    if (
+      state.storageLevel >= 3 ||
+      state.gold < state.storageLevel * 15 ||
+      state.wood < 3
+    ) {
+      toast("Не хватает материалов");
+      return;
+    }
+    state.gold -= state.storageLevel * 15;
+    state.wood -= 3;
+    state.storageLevel++;
+    hubChanged();
+  };
+  $("upgradeweapon").onclick = () => {
+    if (
+      state.benchLevel < 3 ||
+      state.weaponUpgrade >= 3 ||
+      state.gold < 30 ||
+      state.ore < 3
+    ) {
+      toast("Не хватает материалов или уровня верстака");
+      return;
+    }
+    state.gold -= 30;
+    state.ore -= 3;
+    state.weaponUpgrade++;
+    hubChanged();
+  };
+}
+function hubChanged() {
+  save();
+  syncHUD();
+  if (net.joined) sendProgress();
+  const b = props.find((p) => p.kind === "bench");
+  if (b) {
+    b.mesh.scale.y = 1 + (state.benchLevel - 1) * 0.12;
+    const spark = box(b.mesh, 0.6, 1.05, 0, 0.22, 0.12, 0.22, 0xd7ae68);
+    spark.rotation.y = state.benchLevel * 0.5;
+  }
+  hubMenu();
+}
+function endingMenu() {
+  if (state.floor < 5 || enemies.some((e) => e.hp > 0)) {
+    toast("За последней дверью ещё слышны шаги стража");
+    return;
+  }
+  modal(
+    `<div class="eyebrow">ПОСЛЕДНЯЯ ДВЕРЬ · ВАШ ВЫБОР</div><div class="endingpanel"><img src="/assets/warden-portrait.png?v=3" alt="Узник"><div><h2>«Ты уже выбирал однажды»</h2><p>Голос звучит не в зале, а в вашей памяти. Вы помните цену печати. Помните тех, кто не вернулся. Узник не просит прощения. Он просит конца.</p><p>Оставить его здесь — значит стать новым хранителем. Освободить — принять неизвестность вместе с ним.</p><button id="endingseal" class="primary">Удержать печать</button><button id="endingfree">Освободить узника</button></div></div>`,
+  );
+  $("endingseal").onclick = () => finish("seal");
+  $("endingfree").onclick = () => finish("free");
+}
+function finish(choice: "seal" | "free") {
+  if (net.joined && !net.isHost) {
+    toast("Судьбу мира выбирает хозяин");
+    return;
+  }
+  state.ending = choice;
+  state.deepest = 5;
+  save();
+  syncHUD();
+  if (net.joined) send({ type: "ending", choice });
+  showEpilogue(choice);
+}
+function showEpilogue(choice: "seal" | "free") {
+  modal(
+    `<div class="eyebrow">ЭПИЛОГ · ${choice === "seal" ? "НОВЫЙ ХРАНИТЕЛЬ" : "ОТКРЫТАЯ ДВЕРЬ"}</div><h2>${choice === "seal" ? "Некоторые двери остаются закрытыми." : "Ни одна ночь не длится вечно."}</h2><p class="loretext">${choice === "seal" ? "Вы кладёте ладонь на камень. Печать принимает ваше имя, но не забирает память. Теперь вы знаете, что храните, и почему. В лесу снова слышны птицы. В пустоте горит ваш маленький свет." : "Вы размыкаете последний знак. Существо выходит из тьмы без торжества. «Я не обещаю быть добрым», — говорит оно. «Тогда начни с того, чтобы быть свободным», — отвечаете вы. Над перевалом впервые за много лет идёт тёплый дождь."}</p><p>Короткая кампания завершена. Персонаж и добыча сохранены. Вы можете продолжить исследование.</p><button id="afterending" class="primary">Вернуться в приют</button>`,
+  );
+  $("afterending").onclick = () => changeZone("hub");
+}
+$("mapbtn").onclick = mapMenu;
+$("journalbtn").onclick = journalMenu;
+$("talentbtn").onclick = talentMenu;
+$("ward").onclick = ward;
+$("hubbtn").onclick = hubMenu;
 let prev = performance.now(),
   elapsed = 0,
   netTick = 0,
@@ -1460,7 +2181,14 @@ function frame(now: number) {
     if (toastTimer <= 0) $("toast").textContent = "";
   }
   if (started && !dead) {
-    state.mp = Math.min(60, state.mp + dt * 2.2);
+    state.mp = Math.min(
+      60,
+      state.mp + dt * (state.talents.includes("flow") ? 4 : 2.2),
+    );
+    wardTime = Math.max(0, wardTime - dt);
+    wardCD = Math.max(0, wardCD - dt);
+    $("wardcd").textContent =
+      wardTime > 0 ? "ПОКРОВ" : wardCD > 0 ? Math.ceil(wardCD) + "с" : "";
     if (state.zone === "hub")
       state.hp = Math.min(maxHealth(state), state.hp + dt * 4);
     const move = new THREE.Vector3();
@@ -1477,10 +2205,12 @@ function frame(now: number) {
       castTime = 0;
       const next = player.position.clone().add(move);
       const bound =
-        state.zone === "hub" ? 5.3 : state.zone === "abyss" ? 10 : 24;
+        state.zone === "hub" ? 5.3 : state.zone === "abyss" ? 14 : 24;
       if (
         Math.abs(next.x) < bound &&
         Math.abs(next.z) < bound &&
+        (state.zone !== "abyss" ||
+          abyssTiles.has(`${Math.round(next.x)}:${Math.round(next.z)}`)) &&
         !obstacles.some(
           (o) => Math.hypot(next.x - o.x, next.z - o.z) < o.r + 0.3,
         ) &&
@@ -1491,8 +2221,16 @@ function frame(now: number) {
       )
         player.position.copy(next);
       heroSprite.position.y = 0.95 + Math.sin(elapsed * 15) * 0.045;
+      heroSprite.material.map = texture(
+        `${state.hero}-${state.armorEquipped ? "armor" : move.x + move.z < 0 ? "back" : "walk"}-${Math.floor(elapsed * 9) % 4}`,
+      );
       heroSprite.scale.x = move.x + move.z < 0 ? -1.2 : 1.2;
-    } else heroSprite.position.y = 0.95 + Math.sin(elapsed * 2) * 0.015;
+    } else {
+      heroSprite.position.y = 0.95 + Math.sin(elapsed * 2) * 0.015;
+      heroSprite.material.map = texture(
+        state.armorEquipped ? `${state.hero}-armor-0` : state.hero,
+      );
+    }
     if (castTime > 0) {
       castTime -= dt;
       $("cast").style.display = "block";
@@ -1501,7 +2239,7 @@ function frame(now: number) {
         `width:${((2 - castTime) / 2) * 100}%`,
       );
       if (castTime <= 0) {
-        changeZone(state.zone === "hub" ? "forest" : "hub");
+        changeZone(state.zone === "hub" ? state.returnZone : "hub");
         tone(300, 0.5);
       }
     } else $("cast").style.display = "none";
@@ -1528,6 +2266,10 @@ function frame(now: number) {
       portal:
         state.zone === "hub" ? "Вернуться в лес" : "Войти в астральный приют",
       abyss: "Спуститься в Бездну",
+      gate: "Карта переходов",
+      stairs: "Спуститься на следующий этаж",
+      altar: "Прикоснуться к печати",
+      hubupgrade: "Улучшения приюта",
     };
     $("prompt").style.display = nearest ? "block" : "none";
     if (nearest) $("prompt").textContent = `[ E ]  ${labels[nearest.kind]}`;
@@ -1551,6 +2293,33 @@ function frame(now: number) {
       const bar = e.mesh.getObjectByName("enemyhp");
       if (bar) bar.scale.x = Math.max(0, e.hp / e.max);
       e.attack -= dt;
+      if (e.boss) {
+        e.pulse -= dt;
+        const warning = e.mesh.getObjectByName("warning") as THREE.Mesh;
+        if (warning) {
+          const charging = e.pulse < 1.4 && e.pulse > 0;
+          (warning.material as THREE.MeshBasicMaterial).opacity = charging
+            ? 0.65
+            : 0;
+          warning.scale.setScalar(2.3);
+        }
+        if (e.pulse <= 0) {
+          e.pulse = 6;
+          if (
+            dashTime <= 0 &&
+            e.mesh.position.distanceTo(player.position) < 3.5
+          ) {
+            state.hp -= Math.ceil(26 * (wardTime > 0 ? 0.5 : 1));
+            combat = 5;
+            tone(70, 0.3);
+            if (state.hp <= 0) {
+              death();
+              break;
+            }
+          }
+        }
+      }
+
       if (!net.joined || net.isHost) {
         let target = player.position;
         let distance = Math.hypot(e.x - target.x, e.z - target.z);
@@ -1565,8 +2334,16 @@ function frame(now: number) {
           const v = new THREE.Vector3(target.x - e.x, 0, target.z - e.z)
             .normalize()
             .multiplyScalar(dt * (e.boss ? 1.3 : 1.65));
-          e.x += v.x;
-          e.z += v.z;
+          const nx = e.x + v.x,
+            nz = e.z + v.z;
+          if (
+            (state.zone !== "abyss" ||
+              abyssTiles.has(`${Math.round(nx)}:${Math.round(nz)}`)) &&
+            !obstacles.some((o) => Math.hypot(nx - o.x, nz - o.z) < o.r + 0.2)
+          ) {
+            e.x = nx;
+            e.z = nz;
+          }
         }
         e.mesh.position.set(e.x, 0, e.z);
       }
@@ -1576,7 +2353,10 @@ function frame(now: number) {
         if (dashTime > 0) continue;
         state.hp -= Math.max(
           1,
-          (e.boss ? 22 : 9) - (state.armorEquipped ? 4 : 0),
+          Math.ceil(
+            ((e.boss ? 22 : 9) - (state.armorEquipped ? 4 : 0)) *
+              (wardTime > 0 ? 0.5 : 1),
+          ),
         );
         combat = 5;
         castTime = 0;
@@ -1620,6 +2400,10 @@ function frame(now: number) {
   cd.textContent = String(Math.ceil(novaTime));
   camera.position.copy(player.position).add(new THREE.Vector3(22, 27, 22));
   camera.lookAt(player.position.x, 0, player.position.z);
+  music.update(state.zone, combat > 0);
+  (ring.material as THREE.MeshBasicMaterial).color.set(
+    wardTime > 0 ? 0x9fcfe3 : 0xc4bf89,
+  );
   renderer.render(scene, camera);
   for (const p of peers.values()) {
     p.mesh.position.lerp(p.target, Math.min(1, dt * 12));
@@ -1646,6 +2430,28 @@ function frame(now: number) {
     mapTick = 0;
   }
 }
+const account = new Account(
+  modal,
+  toast,
+  () => ({ ...state, ...guestWorld }),
+  (data: unknown) => {
+    if (
+      !data ||
+      typeof data !== "object" ||
+      !("level" in data) ||
+      !("zone" in data)
+    ) {
+      toast("Некорректный слот");
+      return;
+    }
+    externalReload = true;
+    localStorage.setItem("forest-ash-v3", JSON.stringify(data));
+    location.reload();
+  },
+);
+$("accountbtn").onclick = () => {
+  void account.open();
+};
 buildZone(state.zone, false);
 applyHero();
 requestAnimationFrame(frame);

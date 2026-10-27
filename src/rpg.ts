@@ -54,7 +54,7 @@ export function spellDamage(s: Progress) {
   return 35 + s.focus * 5;
 }
 export const icon = (name: string, cls = "") =>
-  `<img class="pixel-icon ${cls}" src="/assets/item-${name}.png" alt="" draggable="false">`;
+  `<img class="pixel-icon ${cls}" src="/assets/item-${name}.png?v=3" alt="" draggable="false">`;
 export const recipes = [
   {
     id: "blade",

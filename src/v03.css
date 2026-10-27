@@ -1,0 +1,326 @@
+#campaignprogress {
+  font: 10px/1.6 Arial;
+  color: #d6c089;
+  margin-top: 16px;
+  border-top: 1px solid #9d916438;
+  padding-top: 12px;
+}
+.campaignnav {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 5px;
+  margin-top: 10px;
+}
+.campaignnav button {
+  font: 10px Arial;
+  color: #bbcab9;
+  padding: 7px;
+  background: #162d36;
+}
+.campaignnav kbd {
+  float: right;
+  font: 8px Arial;
+  color: #8ca8a1;
+}
+.left {
+  top: 125px;
+}
+.sidequest {
+  margin-top: 15px;
+  padding-top: 13px;
+}
+.sidequest p {
+  font-size: 11px;
+}
+.party {
+  margin-top: 15px;
+  padding-top: 14px;
+}
+.member {
+  margin: 12px 0;
+}
+#floornum {
+  text-align: center;
+  font: 9px Arial;
+  letter-spacing: 2px;
+  color: #d6bc8c;
+  margin-top: 15px;
+}
+.worldcards {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 10px;
+  margin: 25px 0;
+}
+.worldcard {
+  background: linear-gradient(150deg, #233d46, #15242e);
+  padding: 18px 10px !important;
+  margin: 0 !important;
+  text-align: left;
+  min-height: 235px;
+  border-top: 2px solid var(--region);
+}
+.worldcard img {
+  height: 55px;
+  width: 55px;
+  object-fit: contain;
+  image-rendering: pixelated;
+  margin: 22px 0 10px;
+}
+.worldcard h3 {
+  font-size: 17px;
+  line-height: 1.3;
+  margin: 8px 0;
+}
+.worldcard p {
+  font: 10px/1.5 Arial;
+  min-height: 30px;
+}
+.worldcard > span {
+  font: 7px Arial;
+  letter-spacing: 1px;
+  color: var(--region);
+}
+.worldcard small {
+  font: 9px/1.6 Arial;
+  color: #a7b9ae;
+}
+.worldcard.current {
+  border-color: #dac48c;
+  background: #28433e;
+}
+.mapactions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.journalentry {
+  border-left: 2px solid #a58e65;
+  padding: 8px 18px;
+  margin: 15px 0;
+  background: #10252c66;
+}
+.journalentry b {
+  font: 14px Georgia;
+  color: #dac591;
+}
+.journalentry p {
+  font-size: 13px;
+  margin: 9px 0;
+}
+.talentgrid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+  margin: 22px 0;
+}
+.talent {
+  padding: 17px !important;
+  margin: 0 !important;
+  text-align: left;
+  background: linear-gradient(#28454b, #162933);
+  min-height: 200px;
+}
+.talent p {
+  font: 11px/1.6 Arial;
+  min-height: 50px;
+}
+.talent small {
+  font: 8px Arial;
+  color: #b6bc97;
+}
+.talent h3 {
+  font-size: 17px;
+  margin-top: 15px;
+}
+.talent.learned {
+  opacity: 0.8;
+  border-color: #69b0a3 !important;
+}
+.upgradegrid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 16px;
+  margin-top: 25px;
+}
+.upgradegrid > div {
+  background: #122b3366;
+  padding: 15px;
+  border: 1px solid #a58e6540;
+}
+.upgradegrid h3 {
+  font-size: 18px;
+  margin: 15px 0;
+}
+.upgradegrid p {
+  font: 12px/1.7 Arial;
+  min-height: 100px;
+}
+.upgradegrid button {
+  font-size: 10px !important;
+  width: 100%;
+  margin: 0 !important;
+  min-height: 46px;
+}
+.endingpanel {
+  display: grid;
+  grid-template-columns: 220px 1fr;
+  gap: 25px;
+}
+.endingpanel > img {
+  max-width: 220px;
+  height: 380px;
+  object-fit: contain;
+}
+.loretext {
+  font: 19px/1.8 Georgia !important;
+  color: #ddd4b4 !important;
+  margin: 28px 0 !important;
+}
+.skills {
+  gap: 6px;
+}
+.skill {
+  width: 56px;
+}
+.save {
+  width: 145px;
+}
+.save small {
+  font-size: 8px;
+}
+.build {
+  color: #dabd81;
+}
+.dialog {
+  width: 880px;
+}
+.heroselect img {
+  image-rendering: pixelated;
+}
+.portrait img {
+  object-fit: contain;
+}
+.paperdoll > img {
+  image-rendering: pixelated;
+}
+.introcast img {
+  image-rendering: pixelated;
+}
+.intro {
+  max-height: 95vh;
+}
+.left .eyebrow {
+  font-size: 8px;
+}
+.left h2 {
+  font-size: 21px;
+}
+.left .progress {
+  margin: 14px 0 9px;
+}
+.left p {
+  line-height: 1.7;
+}
+.audio-note {
+  font: 10px Arial;
+  color: #88b2a7;
+}
+@media (max-height: 800px) {
+  .left {
+    top: 110px;
+    padding: 15px;
+  }
+  .left .sidequest {
+    display: none;
+  }
+  .party {
+    margin-top: 12px;
+  }
+  .campaignnav {
+    margin-top: 8px;
+  }
+  .campaignnav button {
+    padding: 6px;
+  }
+  .right {
+    top: 110px;
+  }
+  #campaignprogress {
+    margin-top: 10px;
+    padding-top: 10px;
+  }
+}
+@media (max-width: 1150px) {
+  .save {
+    display: none;
+  }
+  .worldcards {
+    grid-template-columns: repeat(2, 1fr);
+  }
+  .worldcard {
+    min-height: 190px;
+  }
+  .worldcard img {
+    margin: 12px 0 5px;
+    height: 40px;
+  }
+  .talentgrid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+  .upgradegrid {
+    grid-template-columns: 1fr;
+  }
+  .upgradegrid p {
+    min-height: 0;
+  }
+  .endingpanel {
+    grid-template-columns: 150px 1fr;
+  }
+  .endingpanel > img {
+    width: 150px;
+    height: 280px;
+  }
+  .skill {
+    width: 50px;
+  }
+  .character {
+    width: 270px;
+  }
+  .vitals {
+    width: 180px;
+  }
+  .skills {
+    gap: 4px;
+  }
+}
+@media (max-width: 720px) {
+  .endingpanel {
+    grid-template-columns: 1fr;
+  }
+  .endingpanel > img {
+    display: none;
+  }
+  .worldcards {
+    grid-template-columns: repeat(2, 1fr);
+  }
+  .talentgrid {
+    grid-template-columns: 1fr;
+  }
+  .skill {
+    width: 42px;
+  }
+  .skill small {
+    font-size: 8px;
+  }
+  .skill kbd {
+    font-size: 6px;
+  }
+  .pixel-icon {
+    height: 30px;
+    width: 30px;
+  }
+  .loretext {
+    font-size: 16px !important;
+  }
+}
